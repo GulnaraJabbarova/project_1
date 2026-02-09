@@ -37,11 +37,14 @@ print(b)  # [[99, 2], [3, 4]]
 - log faylları harada saxlanılsın
 - hansı plugin aktiv olsun
 
-* Niyə config file istifadə olunur?
+*** Niyə config file istifadə olunur?
 - Kodu dəyişmədən proqram davranışını dəyişmək olur
 - Fərqli mühitlər (test, prod və s.) üçün ayrı ayarlar saxlamaq olur
 - Təhlükəsizlik və idarəetmə daha rahat olur
 
 
 
+🔹 Blueprint — ən sadə dildə desək: detallı plan və ya layihə sxemi deməkdir.
+➡ yüksək səviyyəli arxitektura planı
+➡ “big picture” dizayn sxemi demək ola bilər
 
