@@ -48,3 +48,24 @@ print(b)  # [[99, 2], [3, 4]]
 ➡ yüksək səviyyəli arxitektura planı
 ➡ “big picture” dizayn sxemi demək ola bilər
 
+
+
+🔹 Data quality — məlumatın nə qədər düzgün, etibarlı və istifadə məqsədi üçün yararlı olduğunu göstərən anlayışdır.
+🔹 Data lineage — məlumatın haradan gəldiyini, necə dəyişdiyini və hara getdiyini izləmək və sənədləşdirmək prosesidir - Data journey.
+  📦 kargonun tracking sistemi kimi
+  - Haradan çıxdı → Harada dayandı → Harada istifadə olundu
+
+In DWH EXP
+Reportdakı rəqəm hansı source-dan gəlib
+Hansı transform tətbiq olunub
+Hansı query / job dəyişib
+
+
+
+
+
+
+
+
+
+
