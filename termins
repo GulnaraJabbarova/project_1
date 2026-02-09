@@ -61,9 +61,16 @@ Hansı transform tətbiq olunub
 Hansı query / job dəyişib
 
 
+🔹dbt (Data Build Tool) — data warehouse daxilində raw datanı təmiz, analizə hazır dataya çevirmək üçün SQL-əsaslı transformasiya alətidir.
 
+📥 1️⃣ Data Ingestion
 
+🔹Ingestion — datanı source-dan sistemə gətirmək (yükləmək) deməkdir.
 
+EXP
+- API → Data warehouse
+- Excel → Database
+- App log → Data lake
 
 
 
