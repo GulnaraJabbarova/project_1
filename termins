@@ -1,5 +1,5 @@
-Iteration → loop ilə təkrar
-Recursion → funksiya özünü çağırır
+🔹 Iteration → loop ilə təkrar
+🔹 Recursion → funksiya özünü çağırır
 ---------------------------------
 
 
@@ -29,3 +29,19 @@ print(a)  # [[1, 2], [3, 4]]
 print(b)  # [[99, 2], [3, 4]]
 
 <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+
+🔹 Config file (configuration file) — proqramın necə işləyəcəyini təyin edən ayarların saxlandığı fayldır.
+- proqram hansı dili istifadə etsin
+- database haradadır
+- log faylları harada saxlanılsın
+- hansı plugin aktiv olsun
+
+* Niyə config file istifadə olunur?
+- Kodu dəyişmədən proqram davranışını dəyişmək olur
+- Fərqli mühitlər (test, prod və s.) üçün ayrı ayarlar saxlamaq olur
+- Təhlükəsizlik və idarəetmə daha rahat olur
+
+
+
+
