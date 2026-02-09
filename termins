@@ -1,10 +1,12 @@
 Iteration → loop ilə təkrar
 Recursion → funksiya özünü çağırır
 ---------------------------------
-🔹 Shallow Copy (Səthi kopya)EXP:
+
+
+🔹 Shallow Copy (Səthi kopya)
 ➡️ İçindəki nested obyektlər eyni yaddaşda qaldığı üçün b dəyişdikdə b də dəyişir
 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-
+EXP:
 import copy
 a = [[1, 2], [3, 4]]
 b = copy.copy(a)
@@ -16,9 +18,10 @@ print(b)  # [[99, 2], [3, 4]]
 
 
 🔹 Deep Copy (Dərin kopya)
+iki fərqli obyekt yaradır
 >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+EXP:
 import copy
-
 a = [[1, 2], [3, 4]]
 b = copy.deepcopy(a)
 b[0][0] = 99
