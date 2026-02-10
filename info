@@ -1,0 +1,7 @@
+HTTP status codes
+
+1xx	Informational – sorğu qəbul olunub, proses davam edir
+2xx	Success – sorğu uğurla yerinə yetirildi
+3xx	Redirect – başqa ünvana yönləndirmə var
+4xx	Client error – istifadəçi tərəfdə səhv var
+5xx	Server error – server tərəfdə problem var
