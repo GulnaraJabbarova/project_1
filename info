@@ -5,3 +5,15 @@ HTTP status codes
 3xx	Redirect – başqa ünvana yönləndirmə var
 4xx	Client error – istifadəçi tərəfdə səhv var
 5xx	Server error – server tərəfdə problem var
+
+
+
+📡 HTTP (HyperText Transfer Protocol) – internetdə məlumat ötürmək üçün istifadə olunan əsas protokoldur.
+Brauzerin saytdan məlumat (HTML, şəkil, video və s.) alması üçün istifadə olunur.
+👉 Məlumat şifrələnmir
+
+ 
+🔒HTTPS (HTTP Secure) – HTTP-nin təhlükəsiz versiyasıdır.
+👉 Məlumat ötürülməzdən əvvəl şifrələnir (SSL/TLS ilə).
+👉 Məlumatı kənar adam oxuya bilmir
+👉 Saytın həqiqi olub-olmadığı yoxlanılır (sertifikat vasitəsilə)
