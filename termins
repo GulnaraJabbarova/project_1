@@ -75,4 +75,29 @@ EXP
 🔹Integration — müxtəlif source-lardan gələn datanı birləşdirmək və uyğunlaşdırmaq deməkdir.
 🔹Migration — datanı bir sistemdən başqa sistemə köçürmək deməkdir.
 
+🔹 ODBC (Open Database Connectivity)
 
+Microsoft tərəfindən hazırlanıb.
+
+Müxtəlif proqramlaşdırma dilləri ilə istifadə oluna bilir (C, C++, .NET və s.).
+
+SQL vasitəsilə müxtəlif DBMS-lərə qoşulmağa imkan verir.
+
+Adətən driver manager + driver arxitekturası istifadə edir.
+
+Çox universal connector sayılır.
+
+👉 Yəni: “Hər dil üçün ümumi database connector” kimi düşünə bilərsən.
+
+
+🔹 JDBC (Java Database Connectivity)
+
+Java üçün xüsusi hazırlanmış API-dir.
+
+Java proqramlarının database-ə qoşulmasını təmin edir.
+
+Java platforması üzərində işlədiyi üçün çox platformalıdır (Windows, Linux, Mac).
+
+Java-ya uyğun object-oriented yanaşma istifadə edir.
+
+👉 Yəni: “Java üçün native database connector” kimi düşün.
