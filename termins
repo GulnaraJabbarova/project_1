@@ -118,4 +118,22 @@ Fayl ölçüsünü daha kiçik edir
 
 Analitik sorğular daha sürətli işləyir
 
+-------------------S3 (Amazon S3) --------------------
+
+S3 (Amazon S3) — AWS-in (Amazon Web Services) bulud saxlama xidmətidir. Sadə dillə: internetdə faylları saxlamaq üçün böyük “cloud disk” kimidir, amma çox böyük miqyas və professional istifadə üçündür.
+
+🔹 S3 nə edir?
+
+Məlumatları object storage kimi saxlayır (file yox, object kimi)
+Fayllar bucket adlı konteynerlərdə saxlanır
+Hər fayl (object) → data + metadata + key (adı / ID-si) olur
+
+🔹 Niyə istifadə olunur?
+Backup və arxiv
+Data lake / big data
+Web site şəkilləri, video, loglar
+Mobil və cloud app dataları
+
+
+
 
