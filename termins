@@ -101,3 +101,21 @@ Java platforması üzərində işlədiyi üçün çox platformalıdır (Windows,
 Java-ya uyğun object-oriented yanaşma istifadə edir.
 
 👉 Yəni: “Java üçün native database connector” kimi düşün.
+
+
+
+
+-------------------Parquet--------------------
+
+Adi fayllar (məsələn CSV) məlumatı sətir-sətir (row) saxlayır.
+Parquet isə məlumatı sütun-sütun (column) saxlayır.
+
+👉 Bu o deməkdir ki:
+
+Lazım olan sütunları tez oxuyur
+
+Fayl ölçüsünü daha kiçik edir
+
+Analitik sorğular daha sürətli işləyir
+
+
