@@ -1,5 +1,7 @@
 *** XMLve HTML ferqi ***
 
-XML → API-lərdən gələn strukturlaşdırılmış data formatıdır.
-
+XML  → API-lərdən gələn strukturlaşdırılmış data formatıdır.
 HTML → web scraping edəndə parse etdiyimiz səhifə strukturudur.
+
+HTML - oz avtomatik yaranmish taglari var ,  case sensitive deyil
+XML  - ozumuz yaradiriq taglaro , case sensitive-dir
