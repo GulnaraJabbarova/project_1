@@ -1,0 +1,1 @@
+df_list["phone"] = df_list["phone"].apply( lambda x: x if x.startswith("0") else "0" + x )
