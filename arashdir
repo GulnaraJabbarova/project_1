@@ -1,1 +1,2 @@
 df_list["phone"] = df_list["phone"].apply( lambda x: x if x.startswith("0") else "0" + x )
+df_policy["phone"] = df_policy["phone"].apply( lambda x: x if pd.isna(x) or str(x).startswith("994") else "994" + str(x) ) - lamda
