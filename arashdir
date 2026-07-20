@@ -2,44 +2,68 @@ df_list["phone"] = df_list["phone"].apply( lambda x: x if x.startswith("0") else
 df_policy["phone"] = df_policy["phone"].apply( lambda x: x if pd.isna(x) or str(x).startswith("994") else "994" + str(x) ) - lamda
 
 
-# Gulnara/main_etl.py
-from pyspark.sql import functions as F
+def run_etl_process(**kwargs):
 
-def clean_data(df):
-    """
-    Əsas təmizləmə funksiyası:
-    - Dublikatları silir
-    - String sütunlardakı kənar boşluqları (trim) silir
-    - Mənfi ədədləri təmizləyir
-    """
-    id_cols = [c for c in df.columns if c.lower().endswith('_id') or c.lower().endswith('_code')]
-    if id_cols:
-        df = df.dropDuplicates(id_cols)
-    else:
-        df = df.dropDuplicates()
+    # 1. Airflow özü MinIO-ya qoşulur (S3Hook vasitəsilə)
 
-    for col_name, dtype in df.dtypes:
-        if dtype == "string":
-            df = df.withColumn(col_name, F.trim(F.col(col_name)))
-            
-    for col_name, dtype in df.dtypes:
-        if dtype in ["int", "double", "long", "float"]:
-            df = df.filter(F.col(col_name) >= 0)
+    s3_hook = S3Hook(aws_conn_id="minio_conn")
 
-    return df
+    bucket_name = "data"
 
-def normalize_columns(df):
-    """
-    Sütun adlarını kiçik hərflərə çevirir
-    """
-    for col_name in df.columns:
-        df = df.withColumnRenamed(col_name, col_name.lower())
-    return df
+    s3_prefix = "download_history/orders_history/"
 
-def remove_nulls(df, subset_cols=None):
-    """
-    Null dəyərləri təmizləyir
-    """
-    if subset_cols:
-        return df.dropna(subset=subset_cols)
-    return df.dropna()
+    # Bucket-dəki faylları tapırıq
+
+    keys = s3_hook.list_keys(bucket_name=bucket_name, prefix=s3_prefix)
+
+    if not keys:
+
+        print("❌ MinIO-da oxunacaq fayl tapılmadı!")
+
+        return
+
+    # Məsələn, ən son yüklənən JSON faylını seçirik:
+
+    json_keys = [k for k in keys if k.endswith('.json')]
+
+    target_key = json_keys[-1] # Ən sonuncu fayl
+
+    print(f"Airflow MinIO-dan faylı endirir: {target_key}")
+
+    # Faylı Airflow konteynerinin lokalına müvəqqəti yükləyirik
+
+    local_file_path = s3_hook.download_file(
+
+        key=target_key, 
+
+        bucket_name=bucket_name, 
+
+        local_path="/tmp"
+
+    )
+
+    # 2. Spark Session utilitdən çağırılır
+
+    spark = get_spark_session(app_name="Gulnara_Cleaning_Pipeline")
+
+    # 3. Spark lokal faylı xətasız və rahat şəkildə oxuyur
+
+    print(f"Spark faylı oxuyur: {local_file_path}")
+
+    bronze_df = spark.read.option("multiline", "true").json(local_file_path)
+
+    # 4. Təmizləmə prosesləri
+
+    silver_df = clean_data(bronze_df)
+
+    silver_df = remove_nulls(silver_df)
+
+    silver_df = normalize_columns(silver_df)
+    print(f"TEMIZ DATA>>>>>>>>>>")
+    silver_df.show(5, truncate=False)
+    silver_df.printSchema()
+    
+
+    # İş bitdikdən sonra təmizlik
+
+    spark.stop()
