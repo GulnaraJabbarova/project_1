@@ -1,2 +1,74 @@
 df_list["phone"] = df_list["phone"].apply( lambda x: x if x.startswith("0") else "0" + x )
 df_policy["phone"] = df_policy["phone"].apply( lambda x: x if pd.isna(x) or str(x).startswith("994") else "994" + str(x) ) - lamda
+
+
+# spark_cleaner.py
+from pyspark.sql import functions as F
+from pyspark.sql.types import StringType, NumericType, IntegerType
+
+def clean_data(df):
+    """
+    Tamamilə universal və dinamik təmizləyici. 
+    Sütun adlarını bilməsinə ehtiyac yoxdur. Datanın tipinə görə təmizlik aparır.
+    """
+    
+    # 1. DİNAMİK DUBLİKAT SİLİNMƏSİ
+    # Cədvəldə sonu "id" və ya "code" ilə bitən sütunları tapıb onlara görə unikal edirik
+    id_columns = [col for col in df.columns if col.endswith("_id") or col.endswith("_code")]
+    if id_columns:
+        df = df.dropDuplicates(id_columns)
+    else:
+        df = df.dropDuplicates() # Əgər ID tapılmasa, tam dublikat sətirləri silir
+
+    # 2. TİPLƏRƏ GÖRƏ DİNAMİK TRANSFORMASİYA
+    for field in df.schema.fields:
+        col_name = field.name
+        col_type = field.dataType
+
+        # A) Əgər Sütun RƏQƏM tipindədirsə (Double, Float, Decimal və s.)
+        if isinstance(col_type, NumericType):
+            # Mənfi dəyərləri, null-ları və ya boşluqları 0.0 edirik
+            # İstisna: əgər sütun Integer-dirsə (məsələn quantity), minimum 1 edirik
+            if isinstance(col_type, IntegerType) and col_name != "customer_id":
+                df = df.withColumn(col_name, F.when((F.col(col_name) < 1) | F.col(col_name).isNull(), 1).otherwise(F.col(col_name)))
+            elif col_name == "customer_id":
+                # Müştəri ID boşdursa -1 qoyuruq
+                df = df.withColumn(col_name, F.coalesce(F.col(col_name), F.lit(-1)))
+            else:
+                # Qiymət və Məbləğ kimi sahələr üçün
+                df = df.withColumn(col_name, F.when((F.col(col_name) < 0) | F.col(col_name).isNull(), 0.0).otherwise(F.col(col_name)))
+
+        # B) Əgər Sütun MƏTN (String) tipindədirsə
+        elif isinstance(col_type, StringType):
+            # Sağındakı-solundakı boşluqları silirik (Trim)
+            df = df.withColumn(col_name, F.trim(F.col(col_name)))
+            
+            # Əgər sütunda tarix formatları və ya xətaları varsa (Məsələn: 'NOT_A_DATE', 'INVALID_DATE_FORMAT')
+            # Onları cari zamanla əvəzləyirik
+            if col_name.endswith("_at"):
+                df = df.withColumn(col_name, F.when(
+                    F.col(col_name).isNull() | (F.col(col_name) == "") | 
+                    F.col(col_name).contains("DATE") | F.col(col_name).contains("INVALID"),
+                    F.current_timestamp().cast("string")
+                ).otherwise(F.col(col_name)))
+            
+            # Normal mətn sütunları üçün (Məsələn: status, city, country)
+            else:
+                # Boş (Null) olanları 'UNKNOWN' edirik, digərlərinin isə baş hərflərini böyük edirik (Initcap)
+                df = df.withColumn(col_name, F.when(F.col(col_name).isNull() | (F.col(col_name) == "") | (F.col(col_name).contains("UNKNOWN")), "UNKNOWN")
+                                           .otherwise(F.initcap(F.col(col_name))))
+
+    return df
+# spark_cleaner.py faylının ilkin hissəsini belə sığortalaya bilərsən:
+def clean_data(df):
+    # Sütun adlarını yoxlayarkən hamısını kiçik hərflə müqayisə edirik
+    lower_columns = [c.lower() for c in df.columns]
+    
+    # --- 1. DUBLİKATLARIN SİLİNMƏSİ ---
+    id_columns = [col for col in df.columns if col.lower().endswith("_id") or col.lower().endswith("_code")]
+    if id_columns:
+        df = df.dropDuplicates(id_columns)
+    else:
+        df = df.dropDuplicates()
+
+    # Digər mövcud tiplərə görə yoxlama dövrü eynilə qalır...
