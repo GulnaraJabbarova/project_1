@@ -1,69 +1,158 @@
-df_list["phone"] = df_list["phone"].apply( lambda x: x if x.startswith("0") else "0" + x )
-df_policy["phone"] = df_policy["phone"].apply( lambda x: x if pd.isna(x) or str(x).startswith("994") else "994" + str(x) ) - lamda
+import logging
+from typing import Optional
+
+from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+
+from spark.main_etl import clean_data
+from spark.spark_utils import (
+    get_postgres_jdbc_config,
+    get_spark_session,
+)
 
 
-def run_etl_process(**kwargs):
+MINIO_CONN_ID = "minio_conn"
+BUCKET_NAME = "data"
 
-    # 1. Airflow özü MinIO-ya qoşulur (S3Hook vasitəsilə)
+TARGET_SCHEMA = "gulnara"
+TARGET_TABLE = "finance"
 
-    s3_hook = S3Hook(aws_conn_id="minio_conn")
+PROCESSED_PREFIX = "download_history/processed/finance"
 
-    bucket_name = "data"
 
-    s3_prefix = "download_history/orders_history/"
+def move_object_to_processed(
+    source_key: str,
+    processed_prefix: str,
+) -> str:
+    """
+    Copy a successfully processed MinIO object to the processed folder,
+    then delete the original object.
+    """
 
-    # Bucket-dəki faylları tapırıq
+    s3_hook = S3Hook(aws_conn_id=MINIO_CONN_ID)
 
-    keys = s3_hook.list_keys(bucket_name=bucket_name, prefix=s3_prefix)
+    file_name = source_key.rsplit("/", 1)[-1]
+    destination_key = f"{processed_prefix}/{file_name}"
 
-    if not keys:
-
-        print("❌ MinIO-da oxunacaq fayl tapılmadı!")
-
-        return
-
-    # Məsələn, ən son yüklənən JSON faylını seçirik:
-
-    json_keys = [k for k in keys if k.endswith('.json')]
-
-    target_key = json_keys[-1] # Ən sonuncu fayl
-
-    print(f"Airflow MinIO-dan faylı endirir: {target_key}")
-
-    # Faylı Airflow konteynerinin lokalına müvəqqəti yükləyirik
-
-    local_file_path = s3_hook.download_file(
-
-        key=target_key, 
-
-        bucket_name=bucket_name, 
-
-        local_path="/tmp"
-
+    s3_hook.copy_object(
+        source_bucket_key=source_key,
+        dest_bucket_key=destination_key,
+        source_bucket_name=BUCKET_NAME,
+        dest_bucket_name=BUCKET_NAME,
     )
 
-    # 2. Spark Session utilitdən çağırılır
+    s3_hook.delete_objects(
+        bucket=BUCKET_NAME,
+        keys=[source_key],
+    )
 
-    spark = get_spark_session(app_name="Gulnara_Cleaning_Pipeline")
+    logging.info(
+        "Moved MinIO object from %s to %s.",
+        source_key,
+        destination_key,
+    )
 
-    # 3. Spark lokal faylı xətasız və rahat şəkildə oxuyur
+    return destination_key
 
-    print(f"Spark faylı oxuyur: {local_file_path}")
 
-    bronze_df = spark.read.option("multiline", "true").json(local_file_path)
+def run_finance_etl(
+    source_key: Optional[str] = None,
+    **context,
+) -> dict:
+    """
+    Read one Finance CSV file from MinIO, clean it with Spark,
+    append the result to PostgreSQL, and move the source file
+    to the processed folder.
+    """
 
-    # 4. Təmizləmə prosesləri
+    if not source_key:
+        task_instance = context["ti"]
+        source_key = task_instance.xcom_pull(
+            task_ids="generate_finance_csv"
+        )
 
-    silver_df = clean_data(bronze_df)
+    if not source_key:
+        raise ValueError(
+            "Finance source key was not received from XCom."
+        )
 
-    silver_df = remove_nulls(silver_df)
+    spark = None
 
-    silver_df = normalize_columns(silver_df)
-    print(f"TEMIZ DATA>>>>>>>>>>")
-    silver_df.show(5, truncate=False)
-    silver_df.printSchema()
-    
+    try:
+        spark = get_spark_session(
+            app_name="Gulnara_Finance_ETL"
+        )
 
-    # İş bitdikdən sonra təmizlik
+        source_path = f"s3a://{BUCKET_NAME}/{source_key}"
 
-    spark.stop()
+        logging.info(
+            "Reading Finance source file: %s",
+            source_path,
+        )
+
+        bronze_df = (
+            spark.read
+            .option("header", "true")
+            .option("inferSchema", "true")
+            .option("delimiter", ",")
+            .csv(source_path)
+        )
+
+        source_record_count = bronze_df.count()
+
+        if source_record_count == 0:
+            raise ValueError(
+                f"Finance source file is empty: {source_key}"
+            )
+
+        silver_df = clean_data(bronze_df)
+
+        cleaned_record_count = silver_df.count()
+
+        jdbc_url, jdbc_properties = get_postgres_jdbc_config()
+
+        target_table = f"{TARGET_SCHEMA}.{TARGET_TABLE}"
+
+        (
+            silver_df.write
+            .mode("append")
+            .jdbc(
+                url=jdbc_url,
+                table=target_table,
+                properties=jdbc_properties,
+            )
+        )
+
+        processed_key = move_object_to_processed(
+            source_key=source_key,
+            processed_prefix=PROCESSED_PREFIX,
+        )
+
+        result = {
+            "source_key": source_key,
+            "processed_key": processed_key,
+            "source_record_count": source_record_count,
+            "cleaned_record_count": cleaned_record_count,
+            "target_table": target_table,
+            "write_mode": "append",
+        }
+
+        logging.info(
+            "Finance ETL completed successfully: %s",
+            result,
+        )
+
+        return result
+
+    except Exception:
+        logging.exception(
+            "Finance ETL failed for source file: %s",
+            source_key,
+        )
+        raise
+
+    finally:
+        if spark is not None:
+            spark.stop()
+            logging.info(
+                "Finance SparkSession stopped."
+            )
