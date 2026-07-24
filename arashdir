@@ -1,161 +1,203 @@
-SELECT transaction_id, order_id, amount, payment_method, transaction_status, processed_at
-FROM gulnara.finance;
-
 import logging
-from typing import Optional
 
-from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+import pendulum
 
-from spark.main_etl import clean_data
-from spark.spark_utils import (
-    get_postgres_jdbc_config,
-    get_spark_session,
+from airflow import DAG
+from airflow.hooks.base import BaseHook
+from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import PythonOperator
+
+from generators.customer_location_generator import (
+    generate_customer_location_in_sql,
 )
+from generators.finance_generator import generate_finance_csv
+from generators.orders_generator import generate_orders_json
 
+from spark.customer_location_etl import (
+    run_customer_location_etl,
+)
+from spark.finance_etl import run_finance_etl
+from spark.orders_etl import run_orders_etl
+from spark.orders_silver_to_gold import run_orders_silver_to_gold_etl
+
+
+BAKU_TZ = pendulum.timezone("Asia/Baku")
 
 MINIO_CONN_ID = "minio_conn"
-BUCKET_NAME = "data"
-
-TARGET_SCHEMA = "gulnara"
-TARGET_TABLE = "finance"
-
-PROCESSED_PREFIX = "download_history/processed/finance"
+MSSQL_CONN_ID = "ms_sql_conn"
+POSTGRES_CONN_ID = "postgres_conn"
 
 
-def move_object_to_processed(
-    source_key: str,
-    processed_prefix: str,
-) -> str:
+def check_airflow_connections() -> dict:
     """
-    Copy a successfully processed MinIO object to the processed folder,
-    then delete the original object.
+    Check whether all required Airflow connections exist.
+
+    For AWS/MinIO connections, the endpoint may be stored in Extra,
+    so Host is not required.
     """
 
-    s3_hook = S3Hook(aws_conn_id=MINIO_CONN_ID)
+    required_connections = [
+        MINIO_CONN_ID,
+        MSSQL_CONN_ID,
+        POSTGRES_CONN_ID,
+    ]
 
-    file_name = source_key.rsplit("/", 1)[-1]
-    destination_key = f"{processed_prefix}/{file_name}"
+    validated_connections = []
 
-    s3_hook.copy_object(
-        source_bucket_key=source_key,
-        dest_bucket_key=destination_key,
-        source_bucket_name=BUCKET_NAME,
-        dest_bucket_name=BUCKET_NAME,
-    )
+    for connection_id in required_connections:
+        connection = BaseHook.get_connection(connection_id)
 
-    s3_hook.delete_objects(
-        bucket=BUCKET_NAME,
-        keys=[source_key],
-    )
+        logging.info(
+            "Connection found: id=%s, type=%s",
+            connection_id,
+            connection.conn_type,
+        )
+
+        if connection_id == MINIO_CONN_ID:
+            endpoint_url = connection.extra_dejson.get(
+                "endpoint_url"
+            )
+
+            if not endpoint_url:
+                raise ValueError(
+                    f"'endpoint_url' is missing in Extra for "
+                    f"connection: {connection_id}"
+                )
+
+            logging.info(
+                "MinIO endpoint validated: %s",
+                endpoint_url,
+            )
+
+        validated_connections.append(connection_id)
+
+    result = {
+        "status": "success",
+        "validated_connections": validated_connections,
+    }
 
     logging.info(
-        "Moved MinIO object from %s to %s.",
-        source_key,
-        destination_key,
+        "All required Airflow connections are valid: %s",
+        result,
     )
 
-    return destination_key
+    return result
 
 
-def run_finance_etl(
-    source_key: Optional[str] = None,
-    **context,
-) -> dict:
-    """
-    Read one Finance CSV file from MinIO, clean it with Spark,
-    append the result to PostgreSQL, and move the source file
-    to the processed folder.
-    """
+default_args = {
+    "owner": "Gulnara",
+    "depends_on_past": False,
+    "retries": 1,
+}
 
-    if not source_key:
-        task_instance = context["ti"]
-        source_key = task_instance.xcom_pull(
-            task_ids="generate_finance_csv"
-        )
 
-    if not source_key:
-        raise ValueError(
-            "Finance source key was not received from XCom."
-        )
+with DAG(
+    dag_id="gulnara_data_pipeline",
+    description=(
+        "Generate dirty Orders, Finance and Customer Location data, "
+        "clean it with Spark and load it into PostgreSQL."
+    ),
+    default_args=default_args,
+    start_date=pendulum.datetime(
+        2026,
+        7,
+        10,
+        tz=BAKU_TZ,
+    ),
+    schedule="0 10 * * *",
+    catchup=False,
+    max_active_runs=1,
+    tags=[
+        "gulnara",
+        "spark",
+        "minio",
+        "mssql",
+        "postgresql",
+    ],
+) as dag:
 
-    spark = None
+    start = EmptyOperator(
+        task_id="start",
+    )
 
-    try:
-        spark = get_spark_session(
-            app_name="Gulnara_Finance_ETL"
-        )
+    check_connections = PythonOperator(
+        task_id="check_connections",
+        python_callable=check_airflow_connections,
+    )
 
-        source_path = f"s3a://{BUCKET_NAME}/{source_key}"
+    generate_orders = PythonOperator(
+        task_id="generate_orders_json",
+        python_callable=generate_orders_json,
+    )
 
-        logging.info(
-            "Reading Finance source file: %s",
-            source_path,
-        )
+    generate_finance = PythonOperator(
+        task_id="generate_finance_csv",
+        python_callable=generate_finance_csv,
+    )
 
-        bronze_df = (
-            spark.read
-            .option("header", "true")
-            .option("inferSchema", "true")
-            .option("delimiter", ",")
-            .csv(source_path)
-        )
+    generate_customer_location = PythonOperator(
+        task_id="generate_customer_location_in_sql",
+        python_callable=generate_customer_location_in_sql,
+    )
 
-        source_record_count = bronze_df.count()
+    process_orders = PythonOperator(
+        task_id="process_orders",
+        python_callable=run_orders_etl,
+        op_kwargs={
+            "source_key": (
+                "{{ ti.xcom_pull("
+                "task_ids='generate_orders_json'"
+                ") }}"
+            ),
+        },
+    )
 
-        if source_record_count == 0:
-            raise ValueError(
-                f"Finance source file is empty: {source_key}"
-            )
+    process_orders_gold = PythonOperator(
+    task_id="process_orders_gold",
+    python_callable=run_orders_silver_to_gold_etl,
+)
 
-        silver_df = clean_data(bronze_df)
+    process_finance = PythonOperator(
+        task_id="process_finance",
+        python_callable=run_finance_etl,
+        op_kwargs={
+            "source_key": (
+                "{{ ti.xcom_pull("
+                "task_ids='generate_finance_csv'"
+                ") }}"
+            ),
+        },
+    )
 
-        cleaned_record_count = silver_df.count()
+    process_customer_location = PythonOperator(
+        task_id="process_customer_location",
+        python_callable=run_customer_location_etl,
+    )
 
-        jdbc_url, jdbc_properties = get_postgres_jdbc_config()
+    end = EmptyOperator(
+        task_id="end",
+    )
 
-        target_table = f"{TARGET_SCHEMA}.{TARGET_TABLE}"
+    start >> check_connections
 
-        (
-            silver_df.write
-            .mode("append")
-            .jdbc(
-                url=jdbc_url,
-                table=target_table,
-                properties=jdbc_properties,
-            )
-        )
+    check_connections >> [
+        generate_orders,
+        generate_finance,
+        generate_customer_location,
+    ]
 
-        processed_key = move_object_to_processed(
-            source_key=source_key,
-            processed_prefix=PROCESSED_PREFIX,
-        )
+    generate_orders >> process_orders >> process_orders_gold
+    generate_finance >> process_finance
 
-        result = {
-            "source_key": source_key,
-            "processed_key": processed_key,
-            "source_record_count": source_record_count,
-            "cleaned_record_count": cleaned_record_count,
-            "target_table": target_table,
-            "write_mode": "append",
-        }
+    (
+        generate_customer_location
+        >> process_customer_location
+    )
 
-        logging.info(
-            "Finance ETL completed successfully: %s",
-            result,
-        )
+    [
+        process_orders_gold,
+        process_finance,
+        process_customer_location,
+    ] >> end
 
-        return result
 
-    except Exception:
-        logging.exception(
-            "Finance ETL failed for source file: %s",
-            source_key,
-        )
-        raise
-
-    finally:
-        if spark is not None:
-            spark.stop()
-            logging.info(
-                "Finance SparkSession stopped."
-            )
