@@ -1,203 +1,132 @@
 import logging
+from typing import Dict, Any
 
-import pendulum
-
-from airflow import DAG
-from airflow.hooks.base import BaseHook
-from airflow.operators.empty import EmptyOperator
-from airflow.operators.python import PythonOperator
-
-from generators.customer_location_generator import (
-    generate_customer_location_in_sql,
+from spark.spark_utils import (
+    get_postgres_jdbc_config,
+    get_spark_session,
 )
-from generators.finance_generator import generate_finance_csv
-from generators.orders_generator import generate_orders_json
+from pyspark.sql import functions as F
 
-from spark.customer_location_etl import (
-    run_customer_location_etl,
-)
-from spark.finance_etl import run_finance_etl
-from spark.orders_etl import run_orders_etl
-from spark.orders_silver_to_gold import run_orders_silver_to_gold_etl
+# Konfiqurasiya parametrləri
+SILVER_SCHEMA = "gulnara"
+SILVER_TABLE = "finance"
 
-
-BAKU_TZ = pendulum.timezone("Asia/Baku")
-
-MINIO_CONN_ID = "minio_conn"
-MSSQL_CONN_ID = "ms_sql_conn"
-POSTGRES_CONN_ID = "postgres_conn"
+GOLD_SCHEMA = "gulnara"
+GOLD_TABLE = "gold_finance_daily_summary"
 
 
-def check_airflow_connections() -> dict:
+def transform_silver_to_gold(silver_df):
     """
-    Check whether all required Airflow connections exist.
-
-    For AWS/MinIO connections, the endpoint may be stored in Extra,
-    so Host is not required.
+    Sizin sütunlara uyğun olaraq Gold (Data Mart) hesabat cədvəlini hazırlayır.
+    Sütunlar: transaction_id, order_id, amount, payment_method, transaction_status, processed_at
     """
+    gold_df = (
+        silver_df
+        # Günlük və Ödəniş üsulu üzrə qruplaşdırırıq
+        .groupBy(
+            F.to_date("processed_at").alias("transaction_date"),
+            "payment_method"
+        )
+        .agg(
+            # Ümumi göstəricilər
+            F.count("transaction_id").alias("total_transactions"),
+            F.countDistinct("order_id").alias("total_orders"),
+            F.sum("amount").alias("total_amount"),
+            F.avg("amount").alias("avg_transaction_amount"),
+            
+            # Statuslar üzrə göstəricilər (Filter / Conditional Aggregation)
+            F.sum(
+                F.when(F.col("transaction_status").isin("SUCCESS", "COMPLETED", "APPROVED"), F.col("amount"))
+                .otherwise(0)
+            ).alias("successful_amount"),
+            
+            F.count(
+                F.when(F.col("transaction_status").isin("SUCCESS", "COMPLETED", "APPROVED"), F.col("transaction_id"))
+            ).alias("successful_transactions_count"),
+            
+            F.count(
+                F.when(F.col("transaction_status").isin("FAILED", "DECLINED", "ERROR"), F.col("transaction_id"))
+            ).alias("failed_transactions_count"),
 
-    required_connections = [
-        MINIO_CONN_ID,
-        MSSQL_CONN_ID,
-        POSTGRES_CONN_ID,
-    ]
+            # Audit üçün yenilənmə tarixi
+            F.current_timestamp().alias("updated_at")
+        )
+    )
+    
+    return gold_df
 
-    validated_connections = []
 
-    for connection_id in required_connections:
-        connection = BaseHook.get_connection(connection_id)
+def run_finance_to_gold(**context) -> Dict[str, Any]:
+    """
+    Silver (gulnara.finance) cədvəlindən məlumatları oxuyur,
+    aqreqasiya edir və Gold cədvəlinə yazır.
+    """
+    spark = None
 
-        logging.info(
-            "Connection found: id=%s, type=%s",
-            connection_id,
-            connection.conn_type,
+    try:
+        spark = get_spark_session(
+            app_name="Gulnara_Finance_To_Gold"
         )
 
-        if connection_id == MINIO_CONN_ID:
-            endpoint_url = connection.extra_dejson.get(
-                "endpoint_url"
+        jdbc_url, jdbc_properties = get_postgres_jdbc_config()
+        
+        silver_target = f"{SILVER_SCHEMA}.{SILVER_TABLE}"
+        gold_target = f"{GOLD_SCHEMA}.{GOLD_TABLE}"
+
+        logging.info("Silver cədvəlindən məlumatlar oxunur: %s", silver_target)
+
+        # Silver cədvəlini PostgreSQL-dən oxuyuruq
+        silver_df = (
+            spark.read
+            .jdbc(
+                url=jdbc_url,
+                table=silver_target,
+                properties=jdbc_properties
             )
+        )
 
-            if not endpoint_url:
-                raise ValueError(
-                    f"'endpoint_url' is missing in Extra for "
-                    f"connection: {connection_id}"
-                )
+        silver_count = silver_df.count()
 
-            logging.info(
-                "MinIO endpoint validated: %s",
-                endpoint_url,
+        if silver_count == 0:
+            logging.warning("Silver cədvəli boşdur. Gold ETL prosesi dayandırılır.")
+            return {"status": "skipped", "reason": "Silver table is empty"}
+
+        # Gold transformasiyasını tətbiq edirik
+        gold_df = transform_silver_to_gold(silver_df)
+        gold_count = gold_df.count()
+
+        logging.info("Gold məlumatları yazılır: %s", gold_target)
+
+        # Analitik hesabat cədvəlini yeniləmək üçün overwrite istifadə edirik
+        (
+            gold_df.write
+            .mode("overwrite")
+            .jdbc(
+                url=jdbc_url,
+                table=gold_target,
+                properties=jdbc_properties,
             )
+        )
 
-        validated_connections.append(connection_id)
+        result = {
+            "silver_source_table": silver_target,
+            "gold_target_table": gold_target,
+            "silver_record_count": silver_count,
+            "gold_record_count": gold_count,
+            "write_mode": "overwrite",
+        }
 
-    result = {
-        "status": "success",
-        "validated_connections": validated_connections,
-    }
+        logging.info("Finance Gold ETL uğurla başa çatdı: %s", result)
+        return result
 
-    logging.info(
-        "All required Airflow connections are valid: %s",
-        result,
-    )
+    except Exception:
+        logging.exception("Finance To Gold ETL zamanı xəta baş verdi.")
+        raise
 
-    return result
+    finally:
+        if spark is not None:
+            spark.stop()
+            logging.info("Finance To Gold SparkSession dayandırıldı.")
 
-
-default_args = {
-    "owner": "Gulnara",
-    "depends_on_past": False,
-    "retries": 1,
-}
-
-
-with DAG(
-    dag_id="gulnara_data_pipeline",
-    description=(
-        "Generate dirty Orders, Finance and Customer Location data, "
-        "clean it with Spark and load it into PostgreSQL."
-    ),
-    default_args=default_args,
-    start_date=pendulum.datetime(
-        2026,
-        7,
-        10,
-        tz=BAKU_TZ,
-    ),
-    schedule="0 10 * * *",
-    catchup=False,
-    max_active_runs=1,
-    tags=[
-        "gulnara",
-        "spark",
-        "minio",
-        "mssql",
-        "postgresql",
-    ],
-) as dag:
-
-    start = EmptyOperator(
-        task_id="start",
-    )
-
-    check_connections = PythonOperator(
-        task_id="check_connections",
-        python_callable=check_airflow_connections,
-    )
-
-    generate_orders = PythonOperator(
-        task_id="generate_orders_json",
-        python_callable=generate_orders_json,
-    )
-
-    generate_finance = PythonOperator(
-        task_id="generate_finance_csv",
-        python_callable=generate_finance_csv,
-    )
-
-    generate_customer_location = PythonOperator(
-        task_id="generate_customer_location_in_sql",
-        python_callable=generate_customer_location_in_sql,
-    )
-
-    process_orders = PythonOperator(
-        task_id="process_orders",
-        python_callable=run_orders_etl,
-        op_kwargs={
-            "source_key": (
-                "{{ ti.xcom_pull("
-                "task_ids='generate_orders_json'"
-                ") }}"
-            ),
-        },
-    )
-
-    process_orders_gold = PythonOperator(
-    task_id="process_orders_gold",
-    python_callable=run_orders_silver_to_gold_etl,
-)
-
-    process_finance = PythonOperator(
-        task_id="process_finance",
-        python_callable=run_finance_etl,
-        op_kwargs={
-            "source_key": (
-                "{{ ti.xcom_pull("
-                "task_ids='generate_finance_csv'"
-                ") }}"
-            ),
-        },
-    )
-
-    process_customer_location = PythonOperator(
-        task_id="process_customer_location",
-        python_callable=run_customer_location_etl,
-    )
-
-    end = EmptyOperator(
-        task_id="end",
-    )
-
-    start >> check_connections
-
-    check_connections >> [
-        generate_orders,
-        generate_finance,
-        generate_customer_location,
-    ]
-
-    generate_orders >> process_orders >> process_orders_gold
-    generate_finance >> process_finance
-
-    (
-        generate_customer_location
-        >> process_customer_location
-    )
-
-    [
-        process_orders_gold,
-        process_finance,
-        process_customer_location,
-    ] >> end
 
 
