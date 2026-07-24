@@ -1,132 +1,15 @@
-import logging
-from typing import Dict, Any
-
-from spark.spark_utils import (
-    get_postgres_jdbc_config,
-    get_spark_session,
-)
-from pyspark.sql import functions as F
-
-# Konfiqurasiya parametrləri
-SILVER_SCHEMA = "gulnara"
-SILVER_TABLE = "finance"
-
-GOLD_SCHEMA = "gulnara"
-GOLD_TABLE = "gold_finance_daily_summary"
-
-
-def transform_silver_to_gold(silver_df):
-    """
-    Sizin sütunlara uyğun olaraq Gold (Data Mart) hesabat cədvəlini hazırlayır.
-    Sütunlar: transaction_id, order_id, amount, payment_method, transaction_status, processed_at
-    """
-    gold_df = (
-        silver_df
-        # Günlük və Ödəniş üsulu üzrə qruplaşdırırıq
-        .groupBy(
-            F.to_date("processed_at").alias("transaction_date"),
-            "payment_method"
-        )
-        .agg(
-            # Ümumi göstəricilər
-            F.count("transaction_id").alias("total_transactions"),
-            F.countDistinct("order_id").alias("total_orders"),
-            F.sum("amount").alias("total_amount"),
-            F.avg("amount").alias("avg_transaction_amount"),
-            
-            # Statuslar üzrə göstəricilər (Filter / Conditional Aggregation)
-            F.sum(
-                F.when(F.col("transaction_status").isin("SUCCESS", "COMPLETED", "APPROVED"), F.col("amount"))
-                .otherwise(0)
-            ).alias("successful_amount"),
-            
-            F.count(
-                F.when(F.col("transaction_status").isin("SUCCESS", "COMPLETED", "APPROVED"), F.col("transaction_id"))
-            ).alias("successful_transactions_count"),
-            
-            F.count(
-                F.when(F.col("transaction_status").isin("FAILED", "DECLINED", "ERROR"), F.col("transaction_id"))
-            ).alias("failed_transactions_count"),
-
-            # Audit üçün yenilənmə tarixi
-            F.current_timestamp().alias("updated_at")
-        )
-    )
-    
-    return gold_df
-
-
-def run_finance_to_gold(**context) -> Dict[str, Any]:
-    """
-    Silver (gulnara.finance) cədvəlindən məlumatları oxuyur,
-    aqreqasiya edir və Gold cədvəlinə yazır.
-    """
-    spark = None
-
-    try:
-        spark = get_spark_session(
-            app_name="Gulnara_Finance_To_Gold"
-        )
-
-        jdbc_url, jdbc_properties = get_postgres_jdbc_config()
-        
-        silver_target = f"{SILVER_SCHEMA}.{SILVER_TABLE}"
-        gold_target = f"{GOLD_SCHEMA}.{GOLD_TABLE}"
-
-        logging.info("Silver cədvəlindən məlumatlar oxunur: %s", silver_target)
-
-        # Silver cədvəlini PostgreSQL-dən oxuyuruq
-        silver_df = (
-            spark.read
-            .jdbc(
-                url=jdbc_url,
-                table=silver_target,
-                properties=jdbc_properties
-            )
-        )
-
-        silver_count = silver_df.count()
-
-        if silver_count == 0:
-            logging.warning("Silver cədvəli boşdur. Gold ETL prosesi dayandırılır.")
-            return {"status": "skipped", "reason": "Silver table is empty"}
-
-        # Gold transformasiyasını tətbiq edirik
-        gold_df = transform_silver_to_gold(silver_df)
-        gold_count = gold_df.count()
-
-        logging.info("Gold məlumatları yazılır: %s", gold_target)
-
-        # Analitik hesabat cədvəlini yeniləmək üçün overwrite istifadə edirik
-        (
-            gold_df.write
-            .mode("overwrite")
-            .jdbc(
-                url=jdbc_url,
-                table=gold_target,
-                properties=jdbc_properties,
-            )
-        )
-
-        result = {
-            "silver_source_table": silver_target,
-            "gold_target_table": gold_target,
-            "silver_record_count": silver_count,
-            "gold_record_count": gold_count,
-            "write_mode": "overwrite",
-        }
-
-        logging.info("Finance Gold ETL uğurla başa çatdı: %s", result)
-        return result
-
-    except Exception:
-        logging.exception("Finance To Gold ETL zamanı xəta baş verdi.")
-        raise
-
-    finally:
-        if spark is not None:
-            spark.stop()
-            logging.info("Finance To Gold SparkSession dayandırıldı.")
-
-
-
+Traceback (most recent call last):
+  File "/home/airflow/.local/lib/python3.12/site-packages/airflow/models/taskinstance.py", line 465, in _execute_task
+    result = _execute_callable(context=context, **execute_callable_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/airflow/.local/lib/python3.12/site-packages/airflow/models/taskinstance.py", line 432, in _execute_callable
+    return execute_callable(context=context, **execute_callable_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/airflow/.local/lib/python3.12/site-packages/airflow/models/baseoperator.py", line 401, in wrapper
+    return func(self, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/airflow/.local/lib/python3.12/site-packages/airflow/operators/python.py", line 235, in execute
+    return_value = self.execute_callable()
+                   ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/airflow/.local/lib/python3.12/site-packages/airflow/operators/python.py", line 252, in execute_callable
+    return self.python_callable(*self.op_args, **self.op_kwargs)
